@@ -120,8 +120,8 @@ class SpringbootCdkProjectStack(Stack):
         container = task_def.add_container(
             f"{image_name}Container",
             image=ecs.ContainerImage.from_registry(f"{account_id}.dkr.ecr.{region}.amazonaws.com/{image_name}:latest"),
-            memory_limit_mib=512,
-            cpu=256,
+            memory_limit_mib=256,  # Updated memory allocation to 256 MB
+            cpu=256,  # CPU remains the same
         )
 
         # Add the port mapping to the container
@@ -195,4 +195,5 @@ class SpringbootCdkProjectStack(Stack):
             code=_lambda.Code.from_asset("lambda"),  # Ensure "lambda" directory exists
             environment=lambda_env
         )
+
 
