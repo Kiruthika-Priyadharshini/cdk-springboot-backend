@@ -3,7 +3,10 @@ from aws_cdk import (
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_elasticloadbalancingv2 as elbv2,
-    Duration
+    Duration,
+    aws_lambda as _lambda,
+    aws_events as events,
+    aws_events_targets as targets,
 )
 from constructs import Construct
 from typing import Sequence
@@ -59,6 +62,50 @@ class SpringbootCdkProjectStack(Stack):
                                                       [user_target_group, order_target_group])
                                    )
 
+        # Add Lambda function to manage ECS service scaling
+        ecs_scheduler_lambda = _lambda.Function(
+            self, "EcsSchedulerLambda",
+            runtime=_lambda.Runtime.PYTHON_3_12,  # Ensure runtime is directly assigned
+            handler="ecs_scheduler.handler",
+            code=_lambda.Code.from_inline(
+                """
+import boto3
+import os
+
+ecs_client = boto3.client('ecs')
+
+def handler(event, context):
+    cluster_name = os.environ['CLUSTER_NAME']
+    service_name = os.environ['SERVICE_NAME']
+    desired_count = int(event['desired_count'])
+
+    response = ecs_client.update_service(
+        cluster=cluster_name,
+        service=service_name,
+        desiredCount=desired_count
+    )
+    return response
+                """
+            ),
+            environment={
+                "CLUSTER_NAME": "MyCluster",
+                "SERVICE_NAME": "UserService",  # Update this if needed
+            }
+        )
+
+        # Create CloudWatch Event Rules for scaling up and down
+        scale_up_rule = events.Rule(
+            self, "ScaleUpRule",
+            schedule=events.Schedule.cron(hour="11", minute="0"),  # 11:00 AM
+        )
+        scale_up_rule.add_target(targets.LambdaFunction(ecs_scheduler_lambda))  # Ensure target is a valid IFunction
+
+        scale_down_rule = events.Rule(
+            self, "ScaleDownRule",
+            schedule=events.Schedule.cron(hour="18", minute="0"),  # 6:00 PM
+        )
+        scale_down_rule.add_target(targets.LambdaFunction(ecs_scheduler_lambda))  # Ensure target is a valid IFunction
+
     def create_task_definition(self, resource_id: str, image_name: str, container_port: int) -> ecs.FargateTaskDefinition:
         """Creates a Fargate task definition for a given service."""
         task_def = ecs.FargateTaskDefinition(self, resource_id)
@@ -101,5 +148,4 @@ class SpringbootCdkProjectStack(Stack):
                                    priority=priority,
                                    conditions=[elbv2.ListenerCondition.path_patterns([path_pattern])],
                                    target_groups=cast(Sequence[IApplicationTargetGroup], [target_group]))
-
 
