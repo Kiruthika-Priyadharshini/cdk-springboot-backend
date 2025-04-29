@@ -15,9 +15,47 @@ from typing import cast
 
 
 class SpringbootCdkProjectStack(Stack):
+    """
+    A CDK stack to deploy a Spring Boot application with ECS, ALB, and Lambda-based scaling.
+    """
 
+    # The class name follows Python's PascalCase naming convention.
+    # No changes are needed unless you want to rename it for clarity or consistency.
+    # Example alternative: SpringBootCdkStack or SpringBootBackendStack
+
+    # Class-level constants
+    LAMBDA_RUNTIME = _lambda.Runtime.PYTHON_3_12
+    DEFAULT_CLUSTER_NAME = "MyCluster"
+    DEFAULT_SERVICE_NAME = "UserService"
+    
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+        """
+        Initializes the SpringbootCdkProjectStack.
+
+        This method sets up the VPC, ECS cluster, task definitions, services, 
+        load balancer, target groups, and a Lambda-based scheduler for scaling ECS services.
+        """
         super().__init__(scope, construct_id, **kwargs)
+
+        # Create Lambda function for ECS scheduling
+        ecs_scheduler_lambda = self.create_ecs_scheduler_lambda()  # Create the Lambda function once
+
+        # Create CloudWatch Event Rules for scaling up and down
+        scale_up_rule = events.Rule(
+            self, "ScaleUpRule",
+            schedule=events.Schedule.cron(hour="11", minute="0"),  # 11:00 AM
+        )
+        scale_up_rule.add_target(targets.LambdaFunction(ecs_scheduler_lambda))  # Reuse the Lambda function
+
+        scale_down_rule = events.Rule(
+            self, "ScaleDownRule",
+            schedule=events.Schedule.cron(hour="18", minute="0"),  # 6:00 PM
+        )
+        scale_down_rule.add_target(targets.LambdaFunction(ecs_scheduler_lambda))  # Reuse the Lambda function
+
+        # Retrieve account ID and region from context
+        account_id = self.node.try_get_context("account_id")
+        region = self.node.try_get_context("region")
 
         # Create a VPC
         vpc = ec2.Vpc(self, "MyVpc", max_azs=2)
@@ -26,8 +64,8 @@ class SpringbootCdkProjectStack(Stack):
         cluster = ecs.Cluster(self, "MyCluster", vpc=vpc)
 
         # Task Definitions for User and Order Services
-        user_task_def = self.create_task_definition("UserTaskDef", "user-service", 8081)
-        order_task_def = self.create_task_definition("OrderTaskDef", "order-service", 8082)
+        user_task_def = self.create_task_definition("UserTaskDef", "user-service", 8081, account_id, region)
+        order_task_def = self.create_task_definition("OrderTaskDef", "order-service", 8082, account_id, region)
 
         # Create an Application Load Balancer
         lb = elbv2.ApplicationLoadBalancer(self, "LB", vpc=vpc, internet_facing=True)
@@ -58,62 +96,30 @@ class SpringbootCdkProjectStack(Stack):
 
         # Add default action to listener
         listener.add_target_groups("DefaultAction",
-                                   target_groups=cast(Sequence[IApplicationTargetGroup], 
+                                   target_groups=cast(Sequence[IApplicationTargetGroup],
                                                       [user_target_group, order_target_group])
                                    )
 
-        # Add Lambda function to manage ECS service scaling
-        ecs_scheduler_lambda = _lambda.Function(
-            self, "EcsSchedulerLambda",
-            runtime=_lambda.Runtime.PYTHON_3_12,  # Ensure runtime is directly assigned
-            handler="ecs_scheduler.handler",
-            code=_lambda.Code.from_inline(
-                """
-import boto3
-import os
+    def create_task_definition(self, resource_id: str, image_name: str, container_port: int, account_id: str, region: str) -> ecs.FargateTaskDefinition:
+        """
+        Creates a Fargate task definition for a given ECS service.
 
-ecs_client = boto3.client('ecs')
+        Args:
+            resource_id (str): The unique identifier for the task definition.
+            image_name (str): The name of the container image.
+            container_port (int): The port the container listens to.
+            account_id (str): The AWS account ID.
+            region (str): The AWS region.
 
-def handler(event, context):
-    cluster_name = os.environ['CLUSTER_NAME']
-    service_name = os.environ['SERVICE_NAME']
-    desired_count = int(event['desired_count'])
-
-    response = ecs_client.update_service(
-        cluster=cluster_name,
-        service=service_name,
-        desiredCount=desired_count
-    )
-    return response
-                """
-            ),
-            environment={
-                "CLUSTER_NAME": "MyCluster",
-                "SERVICE_NAME": "UserService",  # Update this if needed
-            }
-        )
-
-        # Create CloudWatch Event Rules for scaling up and down
-        scale_up_rule = events.Rule(
-            self, "ScaleUpRule",
-            schedule=events.Schedule.cron(hour="11", minute="0"),  # 11:00 AM
-        )
-        scale_up_rule.add_target(targets.LambdaFunction(ecs_scheduler_lambda))  # Ensure target is a valid IFunction
-
-        scale_down_rule = events.Rule(
-            self, "ScaleDownRule",
-            schedule=events.Schedule.cron(hour="18", minute="0"),  # 6:00 PM
-        )
-        scale_down_rule.add_target(targets.LambdaFunction(ecs_scheduler_lambda))  # Ensure target is a valid IFunction
-
-    def create_task_definition(self, resource_id: str, image_name: str, container_port: int) -> ecs.FargateTaskDefinition:
-        """Creates a Fargate task definition for a given service."""
+        Returns:
+            ecs.FargateTaskDefinition: The created task definition.
+        """
         task_def = ecs.FargateTaskDefinition(self, resource_id)
 
         # Define the container for the task definition
         container = task_def.add_container(
             f"{image_name}Container",
-            image=ecs.ContainerImage.from_registry(f"123456789012.dkr.ecr.us-east-1.amazonaws.com/{image_name}:latest"),
+            image=ecs.ContainerImage.from_registry(f"{account_id}.dkr.ecr.{region}.amazonaws.com/{image_name}:latest"),
             memory_limit_mib=512,
             cpu=256,
         )
@@ -124,9 +130,20 @@ def handler(event, context):
 
     def create_target_group(self, resource_id: str, service: ecs.FargateService, container_port: int,
                             vpc: ec2.Vpc) -> elbv2.ApplicationTargetGroup:
-        """Creates a target group for a given ECS service."""
+        """
+        Creates a target group for a given ECS service.
+
+        Args:
+            resource_id (str): The unique identifier for the target group.
+            service (ecs.FargateService): The ECS service to associate with the target group.
+            container_port (int): The port the ECS container listens to.
+            vpc (ec2.Vpc): The VPC to associate with the target group.
+
+        Returns:
+            elbv2.ApplicationTargetGroup: The created target group.
+        """
         return elbv2.ApplicationTargetGroup(self, resource_id,
-                                            port=container_port,  # The port the ECS container listens on
+                                            port=container_port,  # The port the ECS container listens to
                                             protocol=elbv2.ApplicationProtocol.HTTP,
                                             targets=[service],  # Add the ECS service as the target
                                             vpc=vpc,  # Associate target group with the VPC
@@ -141,11 +158,41 @@ def handler(event, context):
     def add_service_target(listener: elbv2.ApplicationListener, target_id: str,
                            target_group: elbv2.ApplicationTargetGroup,
                            path_pattern: str, priority: int):
-        """Adds an ECS service target to a listener with path pattern."""
+        """
+        Adds an ECS service target to a listener with a specified path pattern.
 
+        Args:
+            listener (elbv2.ApplicationListener): The listener to attach the target group to.
+            target_id (str): The unique identifier for the target group.
+            target_group (elbv2.ApplicationTargetGroup): The target group to attach.
+            path_pattern (str): The path pattern for routing traffic.
+            priority (int): The priority of the rule.
+        """
         # Explicitly cast target_groups to Sequence[IApplicationTargetGroup]
         listener.add_target_groups(target_id,
                                    priority=priority,
                                    conditions=[elbv2.ListenerCondition.path_patterns([path_pattern])],
                                    target_groups=cast(Sequence[IApplicationTargetGroup], [target_group]))
+    
+    def create_ecs_scheduler_lambda(self) -> _lambda.Function:
+        """
+        Creates a Lambda function for ECS service scaling.
+
+        Returns:
+            _lambda.Function: The created Lambda function.
+        """
+        lambda_env = {
+            "CLUSTER_NAME": self.DEFAULT_CLUSTER_NAME,
+            "SERVICE_NAME": self.DEFAULT_SERVICE_NAME,
+        }
+
+        # Ensure the Lambda code directory exists and is correctly referenced
+        return _lambda.Function(
+            self,
+            "EcsSchedulerLambda",
+            runtime=self.LAMBDA_RUNTIME,
+            handler="ecs_scheduler.handler",
+            code=_lambda.Code.from_asset("lambda"),  # Ensure "lambda" directory exists
+            environment=lambda_env
+        )
 
