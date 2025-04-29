@@ -1,2 +1,4 @@
 aws-cdk-lib==2.190.0
 constructs>=10.0.0,<11.0.0
+pylint==2.17.5  # Add Pylint for code quality checks
+PyGithub==1.58.1  # Add PyGithub for making pull requests

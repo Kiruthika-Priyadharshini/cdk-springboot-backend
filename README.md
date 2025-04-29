@@ -36,51 +36,46 @@ Once the virtualenv is activated, you can install the required dependencies.
 $ pip install -r requirements.txt
 ```
 
-At this point you can now synthesize the CloudFormation template for this code.
-
-```
-$ cdk synth
-```
-
-To add additional dependencies, for example, other CDK libraries, just add
-them to your `setup.py` file and rerun the `pip install -r requirements.txt`
-command.
-
 ## Steps to Push ECR Images to AWS
 
 Follow these steps to push the Docker images for `user-service` and `order-service` to AWS Elastic Container Registry (ECR):
 
-1. **Authenticate Docker with ECR**:
+1. **Install Required Python Dependencies**:
+   ```
+   pip install -r requirements.txt
+   ```
+
+2. **Authenticate Docker with ECR**:
    ```
    aws ecr get-login-password --region <REGION> | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com
    ```
    Replace `<ACCOUNT_ID>` with your AWS account ID and `<REGION>` with your desired AWS region.
 
-2. **Create ECR Repositories** (if not already created):
+3. **Create ECR Repositories** (if not already created):
    ```
    aws ecr create-repository --repository-name user-service
    aws ecr create-repository --repository-name order-service
    ```
 
-3. **Build the Docker Images**:
+4. **Build the Docker Images**:
    ```
    docker build -t user-service ./path/to/user-service
    docker build -t order-service ./path/to/order-service
    ```
 
-4. **Tag the Docker Images**:
+5. **Tag the Docker Images**:
    ```
    docker tag user-service:latest <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/user-service:latest
    docker tag order-service:latest <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/order-service:latest
    ```
 
-5. **Push the Docker Images to ECR**:
+6. **Push the Docker Images to ECR**:
    ```
    docker push <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/user-service:latest
    docker push <ACCOUNT_ID>.dkr.ecr.<REGION>.amazonaws.com/order-service:latest
    ```
 
-6. **Verify the Images in ECR**:
+7. **Verify the Images in ECR**:
    ```
    aws ecr describe-images --repository-name user-service
    aws ecr describe-images --repository-name order-service
