@@ -1,0 +1,8 @@
+# ...existing code...
+cdk.out
+.venv
+.idea
+__pycache__/springboot_cdk_project_stack.cpython-313.pyc
+**/__init__.py  # Exclude __init__.py in all subfolders
+# ...existing code...
+
