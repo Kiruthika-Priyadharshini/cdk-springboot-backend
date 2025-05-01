@@ -2,11 +2,14 @@ from aws_cdk import (
     Stack,
     aws_ec2 as ec2,
     aws_ecs as ecs,
+    aws_iam as iam,
+    aws_logs as logs,
     aws_elasticloadbalancingv2 as elbv2,
     Duration,
     aws_lambda as _lambda,
     aws_events as events,
-    aws_events_targets as targets,
+    aws_ecr as ecr,
+    aws_events_targets as targets
 )
 from constructs import Construct
 from typing import Sequence
@@ -78,55 +81,76 @@ class SpringbootCdkProjectStack(Stack):
                                           cluster=cluster,
                                           task_definition=user_task_def,
                                           desired_count=1,
+                                          health_check_grace_period=Duration.minutes(2),
                                           )
 
         order_service = ecs.FargateService(self, "OrderService",
                                            cluster=cluster,
                                            task_definition=order_task_def,
                                            desired_count=1,
+                                           health_check_grace_period=Duration.minutes(2),
                                            )
 
         # Create target groups for the services
+#         user_target_group = self.create_target_group("UserTargetGroup", user_service, 8081, vpc)
         user_target_group = self.create_target_group("UserTargetGroup", user_service, 8081, vpc)
         order_target_group = self.create_target_group("OrderTargetGroup", order_service, 8082, vpc)
 
         # Attach ECS services to the listener with path patterns
-        self.add_service_target(listener, "UserTargets", user_target_group, "/user/*", 10)
-        self.add_service_target(listener, "OrderTargets", order_target_group, "/order/*", 20)
+        self.add_service_target(listener, "UserTargets", user_target_group, "/users/*", 10)
+        self.add_service_target(listener, "OrderTargets", order_target_group, "/orders/*", 20)
 
         # Add default action to listener
         listener.add_target_groups("DefaultAction",
                                    target_groups=cast(Sequence[IApplicationTargetGroup],
                                                       [user_target_group, order_target_group])
                                    )
-
-    def create_task_definition(self, resource_id: str, image_name: str, container_port: int, account_id: str, region: str) -> ecs.FargateTaskDefinition:
-        """
-        Creates a Fargate task definition for a given ECS service.
-
-        Args:
-            resource_id (str): The unique identifier for the task definition.
-            image_name (str): The name of the container image.
-            container_port (int): The port the container listens to.
-            account_id (str): The AWS account ID.
-            region (str): The AWS region.
-
-        Returns:
-            ecs.FargateTaskDefinition: The created task definition.
-        """
-        task_def = ecs.FargateTaskDefinition(self, resource_id)
-
-        # Define the container for the task definition
-        container = task_def.add_container(
-            f"{image_name}Container",
-            image=ecs.ContainerImage.from_registry(f"{account_id}.dkr.ecr.{region}.amazonaws.com/{image_name}:latest"),
-            memory_limit_mib=256,  # Updated memory allocation to 256 MB
-            cpu=256,  # CPU remains the same
+    def create_task_definition(self, resource_id: str, image_name: str, container_port: int, account_id: str, region: str):
+        # Create IAM Role for ECS task execution
+        execution_role = iam.Role(
+            self, f"{resource_id}ExecutionRole",
+            assumed_by=iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AmazonECSTaskExecutionRolePolicy")
+            ]
         )
 
-        # Add the port mapping to the container
-        container.add_port_mappings(ecs.PortMapping(container_port=container_port))
+        # Create log group for container logging
+        log_group = logs.LogGroup(
+            self, f"{resource_id}LogGroup",
+            retention=logs.RetentionDays.ONE_WEEK
+        )
+
+        # Reference the ECR repository (no need to hardcode the URI)
+        repository = ecr.Repository.from_repository_name(
+            self, f"{resource_id}EcrRepo", repository_name=image_name
+        )
+
+        # Create task definition with custom execution role
+        task_def = ecs.FargateTaskDefinition(
+            self, resource_id,
+            execution_role=execution_role
+        )
+
+        # Add container with ECR image and logging
+        container = task_def.add_container(
+            f"{image_name}Container",
+            image=ecs.ContainerImage.from_ecr_repository(repository, tag="latest"),
+            memory_limit_mib=512,
+            cpu=256,
+            logging=ecs.LogDriver.aws_logs(
+                stream_prefix="ecs",
+                log_group=log_group
+            )
+        )
+
+        # Port mapping
+        container.add_port_mappings(
+            ecs.PortMapping(container_port=container_port)
+        )
+
         return task_def
+
 
     def create_target_group(self, resource_id: str, service: ecs.FargateService, container_port: int,
                             vpc: ec2.Vpc) -> elbv2.ApplicationTargetGroup:
@@ -142,16 +166,18 @@ class SpringbootCdkProjectStack(Stack):
         Returns:
             elbv2.ApplicationTargetGroup: The created target group.
         """
+        health_check=elbv2.HealthCheck(path=f"/health",
+                                        port=str(container_port),
+                                        interval=Duration.seconds(60),
+                                        timeout=Duration.seconds(30),
+                                        healthy_http_codes="200-499",
+                                        )
         return elbv2.ApplicationTargetGroup(self, resource_id,
                                             port=container_port,  # The port the ECS container listens to
                                             protocol=elbv2.ApplicationProtocol.HTTP,
                                             targets=[service],  # Add the ECS service as the target
                                             vpc=vpc,  # Associate target group with the VPC
-                                            health_check=elbv2.HealthCheck(
-                                                path=f"/health",  # Health check endpoint
-                                                port=str(container_port),
-                                                interval=Duration.seconds(30)
-                                            )
+                                            health_check=health_check
                                             )
 
     @staticmethod
