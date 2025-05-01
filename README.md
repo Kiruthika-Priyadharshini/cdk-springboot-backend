@@ -102,8 +102,20 @@ Once the images are pushed, the ECS services in your CDK stack will automaticall
    ```
 
    This will deploy the ECS cluster, services, and other resources defined in your CDK stack.
+4. **Deploy the CDK Stack with detailed logging**:
+   ```
+   cdk deploy --verbose
+   ```
 
-4. **Destroy the CDK Stack**:
+   This will deploy the ECS cluster, services, and other resources defined in your CDK stack with detailed logging.
+5. **Deploy the CDK Stack with full stack trace if error occurs.**:
+   ```
+   cdk deploy --trace
+   ```
+
+   This will deploy the ECS cluster, services, and other resources defined in your CDK stack with detailed logging. Helpfull for diagnosing deeper issues during deployment process.
+
+6. **Destroy the CDK Stack**:
    ```
    cdk destroy
    ```
